@@ -15,14 +15,57 @@ val MEDIA_EXTS = setOf(
 val SUB_EXTS = setOf("vtt", "srt", "lrc", "txt")
 
 /**
- * 파일명(확장자 제외)에서 숫자 키를 추출한다.
- * - 연속된 숫자 묶음을 모두 찾아 밑줄로 이어 붙인다. (예: "TR7. 예시" → "7", "S01E12" → "01_12")
- * - 숫자가 하나도 없으면 null.
- * 이 키가 같으면 같은 트랙/에피소드로 본다.
+ * 트랙 번호가 아닌 숫자(포맷/품질 표기)를 제거하기 위한 패턴.
+ * 예: MP3, MP4, M4A, 320kbps, 44.1kHz, 24bit, 1080p, x264, 5.1ch
+ */
+private val NOISE_REGEX = Regex(
+    "(?i)(?<![A-Za-z0-9])(?:mp3|mp4|m4a|m4b|m4v|m2ts|ac3|eac3|dts|h\\.?26[45]|x26[45]|" +
+        "\\d{3,4}p|\\d{2,3}\\s?kbps|\\d+(?:\\.\\d+)?\\s?khz|\\d+\\s?bit|\\d\\.\\d\\s?ch)(?![A-Za-z0-9])"
+)
+
+/** 1순위: TRACK / TR / T / 트랙 / トラック 같은 접두어 뒤의 번호. 예: TR7, Track01, t3, 트랙 5 */
+private val PREFIXED_REGEX = Regex(
+    "(?i)(?<![A-Za-z])(?:track|tr|t|트랙|トラック)[\\s._\\-]{0,2}(\\d{1,3})([A-Za-z])?(?![A-Za-z0-9])"
+)
+
+/** 2순위: 이름 맨 앞의 번호. 예: 01_제목, 1-제목, 01A 제목, [01] 제목 */
+private val LEADING_REGEX = Regex(
+    "^[\\s._\\-\\[(\\u3010\\u300C]*(\\d{1,3})([A-Za-z])?(?![A-Za-z0-9])"
+)
+
+/** 3순위: 이름 중간에 구분자로 둘러싸인 번호. 예: 앨범명 - 05 - 제목 */
+private val STANDALONE_REGEX = Regex(
+    "(?<![A-Za-z0-9])(\\d{1,3})([A-Za-z])?(?![A-Za-z0-9])"
+)
+
+private fun buildKey(digits: String, suffix: String?): String {
+    val num = digits.trimStart('0').ifEmpty { "0" }
+    return num + (suffix?.lowercase() ?: "")
+}
+
+/**
+ * 파일명(확장자 제외)에서 트랙 키를 추출한다.
+ *
+ * 순서:
+ * 0. MP3, 320kbps 같은 포맷/품질 표기는 먼저 지운다. (MP3 의 3 이 트랙으로 읽히는 것 방지)
+ * 1. TR / Track / T / 트랙 + 숫자
+ * 2. 이름 맨 앞의 숫자 (01_, 1-, 01A, 1a ...)
+ * 3. 이름 중간에 구분자로 분리된 숫자
+ * 4. 위가 모두 실패하면 기존 방식: 모든 숫자 묶음을 '_' 로 연결 (S01E12 → 1_12)
+ *
+ * 앞자리 0 은 제거하고(01 == 1), 뒤에 붙은 한 글자 알파벳(A/a)은 소문자로 키에 포함한다. (01A → "1a")
+ * 숫자가 하나도 없으면 null.
  */
 fun extractNumberKey(nameWithoutExt: String): String? {
-    val matches = Regex("\\d+").findAll(nameWithoutExt).map { it.value }.toList()
-    return if (matches.isEmpty()) null else matches.joinToString("_")
+    val cleaned = NOISE_REGEX.replace(nameWithoutExt, " ")
+
+    for (regex in listOf(PREFIXED_REGEX, LEADING_REGEX, STANDALONE_REGEX)) {
+        val m = regex.find(cleaned) ?: continue
+        return buildKey(m.groupValues[1], m.groupValues[2].ifEmpty { null })
+    }
+
+    val all = Regex("\\d+").findAll(cleaned).map { it.value.trimStart('0').ifEmpty { "0" } }.toList()
+    return if (all.isEmpty()) null else all.joinToString("_")
 }
 
 /** 확장자 없는 이름 + 확장자 */
