@@ -18,7 +18,9 @@ data class UiProposal(
     val oldName: String,
     val newName: String,
     val key: String,
-    val selected: Boolean = true
+    val selected: Boolean = true,
+    /** 파일명 기준 매칭일 때만: 이름 일치도(0~100) */
+    val score: Int? = null
 )
 
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
@@ -33,6 +35,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var conflicts by mutableStateOf<List<String>>(emptyList())
         private set
     var skipped by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** 트랙명이 같아 번호로 짝을 못 정한 그룹. 비어있지 않으면 "파일명 기준으로 변환할까요?" 확인창을 띄운다 */
+    var pendingGroups by mutableStateOf<List<AmbiguousGroup>>(emptyList())
         private set
 
     var message by mutableStateOf<String?>(null)
@@ -64,6 +70,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         proposals = emptyList()
         conflicts = emptyList()
         skipped = emptyList()
+        pendingGroups = emptyList()
         lastFileNames = emptyList()
         message = null
     }
@@ -103,13 +110,38 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             }
             conflicts = match.conflicts
             skipped = match.skipped
+            pendingGroups = match.ambiguousGroups
             message = when {
-                match.proposals.isEmpty() && match.conflicts.isEmpty() ->
+                match.proposals.isEmpty() && match.conflicts.isEmpty() && match.ambiguousGroups.isEmpty() ->
                     "매칭할 항목이 없습니다. (미디어·자막 ${total}개 스캔)"
                 else ->
-                    "스캔 완료: 제안 ${match.proposals.size}개 / 충돌 ${match.conflicts.size}개 / 이미 일치 ${match.skipped.size}개 (전체 ${total}개)"
+                    "스캔 완료: 제안 ${match.proposals.size}개 / 충돌 ${match.conflicts.size}개 / 이미 일치 ${match.skipped.size}개" +
+                        (if (match.ambiguousGroups.isNotEmpty()) " / 트랙명 중복 ${match.ambiguousGroups.size}그룹" else "") +
+                        " (전체 ${total}개)"
             }
         }
+    }
+
+    /** 확인창 "변환": 트랙명이 같은 그룹을 파일명-자막명 기준 매칭 결과로 제안 목록에 추가 */
+    fun acceptNameMatch() {
+        val groups = pendingGroups
+        if (groups.isEmpty()) return
+        pendingGroups = emptyList()
+        val added = groups.flatMap { it.match.proposals }.map {
+            UiProposal(it.oldName, it.newName, it.key, selected = true, score = it.score)
+        }
+        proposals = (proposals + added).sortedBy { it.oldName }
+        conflicts = conflicts + groups.flatMap { it.match.conflicts }
+        skipped = skipped + groups.flatMap { it.match.skipped }
+        message = "파일명 기준으로 ${added.size}개 제안을 추가했습니다. 일치도를 확인하고 적용하세요."
+    }
+
+    /** 확인창 "건너뛰기": 변환하지 않고 경고로만 남긴다 */
+    fun declineNameMatch() {
+        val groups = pendingGroups
+        if (groups.isEmpty()) return
+        pendingGroups = emptyList()
+        conflicts = conflicts + groups.map { it.warning }
     }
 
     fun applySelected() {

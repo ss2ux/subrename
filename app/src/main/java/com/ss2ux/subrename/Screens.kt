@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -45,6 +47,30 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 fun AppScreen(vm: AppViewModel = viewModel()) {
     val folderLauncher = rememberLauncherForActivityResult(OpenDocumentTreeRw()) { uri ->
         if (uri != null) vm.takeFolder(uri)
+    }
+
+    // 트랙명이 같은 파일이 있을 때: 파일명-자막명 기준으로 변환할지 확인
+    if (vm.pendingGroups.isNotEmpty()) {
+        val groups = vm.pendingGroups
+        val total = groups.sumOf { it.match.proposals.size }
+        AlertDialog(
+            onDismissRequest = { vm.declineNameMatch() },
+            title = { Text("트랙명이 같은 파일이 있어요") },
+            text = {
+                Text(
+                    "트랙명(번호)이 같은 파일이 ${groups.size}그룹 있어 번호만으로는 짝을 정할 수 없습니다.\n\n" +
+                        "파일명-자막명 기준으로 변환할까요?\n" +
+                        "미디어 확장자(.wav 등)를 뺀 이름이 가장 비슷한 것끼리 맞추고, 자막 ${total}개를 바꿀 예정입니다.\n\n" +
+                        "예) 곡1.wav + 곡1.wav.vtt → 곡1.vtt"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.acceptNameMatch() }) { Text("변환") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.declineNameMatch() }) { Text("건너뛰기") }
+            }
+        )
     }
 
     Scaffold(
@@ -246,7 +272,7 @@ private fun ProposalCard(p: UiProposal, onToggle: () -> Unit) {
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    "키: ${p.key}",
+                    "키: ${p.key}" + (p.score?.let { "  ·  파일명 일치도 $it%" } ?: ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

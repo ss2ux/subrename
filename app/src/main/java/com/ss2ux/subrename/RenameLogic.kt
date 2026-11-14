@@ -1,5 +1,7 @@
 package com.ss2ux.subrename
 
+import java.text.Normalizer
+
 /**
  * 순수 로직: 파일 이름에서 숫자 키를 뽑고, 미디어·자막을 매칭해 이름 변경 제안을 만든다.
  * UI / Android API 와 무관.
@@ -98,23 +100,161 @@ fun parseFileName(fullName: String): FileInfo? {
  *   각 자막을 (미디어 stem + "." + 자막 원래 확장자) 로 바꾸도록 제안.
  * - 이미 이름이 같은 경우(이미 맞음)는 제안하지 않는다.
  * - 키가 null인 파일은 무시.
- * - 같은 키에 미디어가 2개 이상이면 충돌로 표시 (제안 안 함).
+ * - 같은 키에 미디어가 2개 이상(트랙명 동일)이거나, 한 미디어에 확장자가 같은 자막이 2개 이상이면
+ *   번호만으로는 짝을 못 정하므로 "파일명-자막명 기준" 매칭 후보([AmbiguousGroup])로 따로 모은다.
+ *   (실제 적용 여부는 사용자가 확인창에서 정한다)
  * - 대상 이름이 이미 존재하면 충돌로 표시.
  *
- * @return 제안 목록 + 충돌/스킵 메시지
+ * @return 제안 목록 + 충돌/스킵 메시지 + 파일명 기준 매칭 후보
  */
 data class RenameProposal(
     val oldName: String,
     val newName: String,
     val key: String,
-    val mediaStem: String
+    val mediaStem: String,
+    /** 파일명 기준 매칭일 때만: 이름 일치도 0~100. 번호 키로 확정된 제안은 null */
+    val score: Int? = null
+)
+
+/** 파일명 기준 매칭 결과 */
+data class NameMatch(
+    val proposals: List<RenameProposal>,
+    val conflicts: List<String>,
+    val skipped: List<String>
+)
+
+/** 트랙명(키)이 같아서 번호만으로 짝을 정할 수 없는 그룹 + 파일명 기준으로 미리 계산한 매칭 */
+data class AmbiguousGroup(
+    val key: String,
+    val mediaCount: Int,
+    val subCount: Int,
+    val warning: String,    // 사용자가 변환을 건너뛸 때 보여줄 경고
+    val match: NameMatch
 )
 
 data class MatchResult(
     val proposals: List<RenameProposal>,
     val conflicts: List<String>,   // 사람이 읽을 수 있는 경고
-    val skipped: List<String>      // 이미 맞는 것 등
+    val skipped: List<String>,     // 이미 맞는 것 등
+    val ambiguousGroups: List<AmbiguousGroup> = emptyList()
 )
+
+/** 파일명 기준 매칭에서 이 일치도(0~1) 미만이면 짝으로 인정하지 않는다 */
+const val MIN_NAME_SCORE = 0.5
+
+/**
+ * 이름 비교용 정규화.
+ * - 유니코드 NFC (맥/윈도우 한글 자모 분리 차이 제거), 소문자, 공백 정리
+ * - 자막이면 끝에 붙은 미디어 확장자 제거: "곡1.wav" (곡1.wav.vtt 의 stem) → "곡1"
+ */
+internal fun normalizeForCompare(stem: String, isSub: Boolean): String {
+    var s = Normalizer.normalize(stem, Normalizer.Form.NFC).lowercase().trim()
+    if (isSub) {
+        val dot = s.lastIndexOf('.')
+        if (dot > 0 && s.substring(dot + 1) in MEDIA_EXTS) s = s.substring(0, dot)
+    }
+    return s.replace(Regex("\\s+"), " ")
+}
+
+private fun levenshtein(a: String, b: String): Int {
+    var prev = IntArray(b.length + 1) { it }
+    var cur = IntArray(b.length + 1)
+    for (i in 1..a.length) {
+        cur[0] = i
+        for (j in 1..b.length) {
+            val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+            cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        }
+        val t = prev; prev = cur; cur = t
+    }
+    return prev[b.length]
+}
+
+/** 0.0 ~ 1.0 (1.0 = 정규화한 이름이 완전히 같음) */
+internal fun nameSimilarity(a: String, b: String): Double {
+    if (a == b) return 1.0
+    if (a.isEmpty() || b.isEmpty()) return 0.0
+    return 1.0 - levenshtein(a, b).toDouble() / maxOf(a.length, b.length)
+}
+
+private data class Candidate(
+    val media: FileInfo,
+    val sub: FileInfo,
+    val score: Double,
+    val alreadyNamed: Boolean
+)
+
+/**
+ * 같은 키 그룹 안에서 파일명(미디어 확장자 뺀 이름)이 가장 비슷한 것끼리 미디어↔자막을 짝짓는다.
+ *
+ * - 일치도 높은 쌍부터 greedy 로 확정한다 (이미 이름이 맞는 자막이 동점이면 우선).
+ * - 자막 1개는 미디어 1개에만 붙는다.
+ * - 한 미디어에는 확장자가 다른 자막(.vtt, .srt ...)을 각각 1개씩 붙일 수 있다.
+ * - 일치도가 [MIN_NAME_SCORE] 미만이면 짝으로 인정하지 않는다.
+ */
+fun matchByName(
+    key: String,
+    medias: List<FileInfo>,
+    subs: List<FileInfo>,
+    existingNames: Set<String>
+): NameMatch {
+    val candidates = mutableListOf<Candidate>()
+    for (m in medias) {
+        val mn = normalizeForCompare(m.stem, isSub = false)
+        for (s in subs) {
+            val score = nameSimilarity(mn, normalizeForCompare(s.stem, isSub = true))
+            if (score < MIN_NAME_SCORE) continue
+            val alreadyNamed = (m.stem + "." + s.originalExt).equals(s.name, ignoreCase = true)
+            candidates.add(Candidate(m, s, score, alreadyNamed))
+        }
+    }
+    candidates.sortWith(
+        compareByDescending<Candidate> { it.score }
+            .thenByDescending { it.alreadyNamed }
+            .thenBy { it.media.name }
+            .thenBy { it.sub.name }
+    )
+
+    val proposals = mutableListOf<RenameProposal>()
+    val conflicts = mutableListOf<String>()
+    val skipped = mutableListOf<String>()
+    val assignedSubs = mutableSetOf<String>()
+    val usedSlots = mutableSetOf<String>()   // "미디어 이름 + 자막 확장자" 한 칸에 자막 1개
+
+    for (c in candidates) {
+        if (c.sub.name in assignedSubs) continue
+        val slot = c.media.name + "\u0000" + c.sub.ext
+        if (slot in usedSlots) continue
+        assignedSubs.add(c.sub.name)
+        usedSlots.add(slot)
+
+        val desired = c.media.stem + "." + c.sub.originalExt
+        if (desired.equals(c.sub.name, ignoreCase = true)) {
+            skipped.add("${c.sub.name} (이미 미디어 이름과 일치)")
+            continue
+        }
+        if (existingNames.any { it.equals(desired, ignoreCase = true) }) {
+            conflicts.add("${c.sub.name} → $desired (대상 이름이 이미 존재)")
+            continue
+        }
+        proposals.add(
+            RenameProposal(
+                oldName = c.sub.name,
+                newName = desired,
+                key = key,
+                mediaStem = c.media.stem,
+                score = (c.score * 100).toInt()
+            )
+        )
+    }
+
+    for (s in subs) {
+        if (s.name !in assignedSubs) {
+            conflicts.add("${s.name} → 짝이 되는 미디어를 못 찾음 (키 '$key', 이름 일치도 부족 또는 이미 다른 자막이 배정됨)")
+        }
+    }
+    return NameMatch(proposals, conflicts, skipped)
+}
 
 fun buildProposals(fileNames: List<String>): MatchResult {
     val infos = fileNames.mapNotNull { parseFileName(it) }
@@ -132,6 +272,7 @@ fun buildProposals(fileNames: List<String>): MatchResult {
     val proposals = mutableListOf<RenameProposal>()
     val conflicts = mutableListOf<String>()
     val skipped = mutableListOf<String>()
+    val groups = mutableListOf<AmbiguousGroup>()
     val existingNames = fileNames.toSet()
 
     val allKeys = (mediaByKey.keys + subByKey.keys).toSet()
@@ -141,8 +282,28 @@ fun buildProposals(fileNames: List<String>): MatchResult {
 
         if (medias.isEmpty() || subs.isEmpty()) continue
 
-        if (medias.size > 1) {
-            conflicts.add("키 '$key': 미디어가 ${medias.size}개 → ${medias.joinToString { it.name }}")
+        // 번호만으로 짝이 안 정해지는 경우:
+        //  - 같은 키의 미디어가 2개 이상 (트랙명 동일)
+        //  - 미디어 1개에 확장자가 같은 자막이 2개 이상 (같은 이름으로 바뀌어 충돌)
+        val duplicateSubExt = subs.groupBy { it.ext }.any { it.value.size > 1 }
+        if (medias.size > 1 || duplicateSubExt) {
+            val match = matchByName(key, medias, subs, existingNames)
+            if (match.proposals.isEmpty()) {
+                // 새로 바꿀 게 없으면 묻지 않는다 (이미 다 맞춰진 상태 등)
+                conflicts.addAll(match.conflicts)
+                skipped.addAll(match.skipped)
+            } else {
+                groups.add(
+                    AmbiguousGroup(
+                        key = key,
+                        mediaCount = medias.size,
+                        subCount = subs.size,
+                        warning = "키 '$key': 트랙명이 같은 파일 → 파일명 기준 변환 건너뜀 " +
+                            "(미디어 ${medias.size}개: ${medias.joinToString { it.name }})",
+                        match = match
+                    )
+                )
+            }
             continue
         }
 
@@ -174,6 +335,7 @@ fun buildProposals(fileNames: List<String>): MatchResult {
     return MatchResult(
         proposals = proposals.sortedBy { it.oldName },
         conflicts = conflicts,
-        skipped = skipped
+        skipped = skipped,
+        ambiguousGroups = groups
     )
 }
