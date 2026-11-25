@@ -59,7 +59,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun clearMessage() { message = null }
 
-    fun setMode(m: RenameMode) {
+    /** 상단 탭 전환. (var mode 의 setter 이름 setMode 와 JVM 시그니처가 겹치지 않게 함) */
+    fun selectMode(m: RenameMode) {
         if (mode == m) return
         mode = m
         pendingGroups = emptyList()

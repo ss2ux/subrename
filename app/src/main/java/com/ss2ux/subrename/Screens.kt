@@ -105,12 +105,12 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
             TabRow(selectedTabIndex = if (vm.mode == RenameMode.TRACK_MATCH) 0 else 1) {
                 Tab(
                     selected = vm.mode == RenameMode.TRACK_MATCH,
-                    onClick = { vm.setMode(RenameMode.TRACK_MATCH) },
+                    onClick = { vm.selectMode(RenameMode.TRACK_MATCH) },
                     text = { Text("트랙 매칭") }
                 )
                 Tab(
                     selected = vm.mode == RenameMode.STRIP_MEDIA_EXT,
-                    onClick = { vm.setMode(RenameMode.STRIP_MEDIA_EXT) },
+                    onClick = { vm.selectMode(RenameMode.STRIP_MEDIA_EXT) },
                     text = { Text("확장자 정리") }
                 )
             }
