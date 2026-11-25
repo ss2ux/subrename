@@ -23,11 +23,20 @@ data class UiProposal(
     val score: Int? = null
 )
 
+/** 상단 탭: 0 = 트랙명 매칭, 1 = .mp3.vtt 등 확장자 조각 제거 */
+enum class RenameMode {
+    TRACK_MATCH,
+    STRIP_MEDIA_EXT
+}
+
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     var treeUri by mutableStateOf<Uri?>(null)
         private set
     var folderName by mutableStateOf<String?>(null)
+        private set
+
+    var mode by mutableStateOf(RenameMode.TRACK_MATCH)
         private set
 
     var proposals by mutableStateOf<List<UiProposal>>(emptyList())
@@ -49,6 +58,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastFileNames: List<String> = emptyList()
 
     fun clearMessage() { message = null }
+
+    fun setMode(m: RenameMode) {
+        if (mode == m) return
+        mode = m
+        pendingGroups = emptyList()
+        if (treeUri != null) scanFolder()
+        else {
+            proposals = emptyList()
+            conflicts = emptyList()
+            skipped = emptyList()
+            message = null
+        }
+    }
 
     fun takeFolder(uri: Uri) {
         // 영구 권한
@@ -97,7 +119,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     .filter { it.isFile && it.name != null }
                     .mapNotNull { it.name }
                 lastFileNames = names
-                buildProposals(names) to names.size
+                val match = when (mode) {
+                    RenameMode.TRACK_MATCH -> buildProposals(names)
+                    RenameMode.STRIP_MEDIA_EXT -> buildStripMediaExtProposals(names)
+                }
+                match to names.size
             }
             busy = false
             if (result == null) {
@@ -106,18 +132,26 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             }
             val (match, total) = result
             proposals = match.proposals.map {
-                UiProposal(it.oldName, it.newName, it.key, selected = true)
+                UiProposal(it.oldName, it.newName, it.key, selected = true, score = it.score)
             }
             conflicts = match.conflicts
             skipped = match.skipped
-            pendingGroups = match.ambiguousGroups
-            message = when {
-                match.proposals.isEmpty() && match.conflicts.isEmpty() && match.ambiguousGroups.isEmpty() ->
-                    "매칭할 항목이 없습니다. (미디어·자막 ${total}개 스캔)"
-                else ->
-                    "스캔 완료: 제안 ${match.proposals.size}개 / 충돌 ${match.conflicts.size}개 / 이미 일치 ${match.skipped.size}개" +
-                        (if (match.ambiguousGroups.isNotEmpty()) " / 트랙명 중복 ${match.ambiguousGroups.size}그룹" else "") +
-                        " (전체 ${total}개)"
+            pendingGroups = if (mode == RenameMode.TRACK_MATCH) match.ambiguousGroups else emptyList()
+            message = when (mode) {
+                RenameMode.TRACK_MATCH -> when {
+                    match.proposals.isEmpty() && match.conflicts.isEmpty() && match.ambiguousGroups.isEmpty() ->
+                        "매칭할 항목이 없습니다. (미디어·자막 ${total}개 스캔)"
+                    else ->
+                        "스캔 완료: 제안 ${match.proposals.size}개 / 충돌 ${match.conflicts.size}개 / 이미 일치 ${match.skipped.size}개" +
+                            (if (match.ambiguousGroups.isNotEmpty()) " / 트랙명 중복 ${match.ambiguousGroups.size}그룹" else "") +
+                            " (전체 ${total}개)"
+                }
+                RenameMode.STRIP_MEDIA_EXT -> when {
+                    match.proposals.isEmpty() && match.conflicts.isEmpty() ->
+                        "정리할 자막이 없습니다. (.mp3.vtt · .wav.srt 형식, 파일 ${total}개 스캔)"
+                    else ->
+                        "스캔 완료: 제안 ${match.proposals.size}개 / 충돌 ${match.conflicts.size}개 / 해당 없음 ${match.skipped.size}개 (전체 ${total}개)"
+                }
             }
         }
     }

@@ -30,6 +30,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -98,8 +100,26 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp)
         ) {
+            // 상단 탭: 기능1 트랙 매칭 / 기능2 확장자 조각 제거
+            TabRow(selectedTabIndex = if (vm.mode == RenameMode.TRACK_MATCH) 0 else 1) {
+                Tab(
+                    selected = vm.mode == RenameMode.TRACK_MATCH,
+                    onClick = { vm.setMode(RenameMode.TRACK_MATCH) },
+                    text = { Text("트랙 매칭") }
+                )
+                Tab(
+                    selected = vm.mode == RenameMode.STRIP_MEDIA_EXT,
+                    onClick = { vm.setMode(RenameMode.STRIP_MEDIA_EXT) },
+                    text = { Text("확장자 정리") }
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp)
+            ) {
             Spacer(Modifier.height(12.dp))
 
             // 폴더 선택 / 현재 폴더
@@ -114,14 +134,26 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
                 }
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "미디어 파일과 자막 파일이 같이 있는 폴더를 고르세요.\n" +
-                        "같은 숫자가 들어 있는 이름을 찾아 자막 이름을 미디어 이름에 맞춥니다.\n\n" +
-                        "예)\n" +
-                        "  TR7. 예시1(일본어).MP3\n" +
-                        "  TR7. 예시2(중국어).VTT\n" +
-                        "→ TR7. 예시1(일본어).VTT\n\n" +
-                        "지원 자막: VTT, SRT, LRC, TXT\n" +
-                        "완전 오프라인. 인터넷 권한 없음.",
+                    when (vm.mode) {
+                        RenameMode.TRACK_MATCH ->
+                            "미디어 파일과 자막 파일이 같이 있는 폴더를 고르세요.\n" +
+                                "같은 숫자가 들어 있는 이름을 찾아 자막 이름을 미디어 이름에 맞춥니다.\n\n" +
+                                "예)\n" +
+                                "  TR7. 예시1(일본어).MP3\n" +
+                                "  TR7. 예시2(중국어).VTT\n" +
+                                "→ TR7. 예시1(일본어).VTT\n\n" +
+                                "지원 자막: VTT, SRT, LRC, TXT\n" +
+                                "완전 오프라인. 인터넷 권한 없음."
+                        RenameMode.STRIP_MEDIA_EXT ->
+                            "자막 파일 이름 끝에 붙은 미디어 확장자 조각을 뗍니다.\n" +
+                                "트랙명과 무관하게 폴더 안 모든 자막을 대상으로 합니다.\n\n" +
+                                "예)\n" +
+                                "  곡이름.mp3.vtt  →  곡이름.vtt\n" +
+                                "  곡이름.wav.srt  →  곡이름.srt\n" +
+                                "  song.MP3.VTT   →  song.VTT\n\n" +
+                                "지원 자막: VTT, SRT, LRC, TXT\n" +
+                                "완전 오프라인. 인터넷 권한 없음."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -233,7 +265,8 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
             } else if (vm.treeUri != null && !vm.busy && vm.message != null) {
                 // 이미 위에서 메시지 표시
             }
-        }
+            } // 탭 아래 내용 Column
+        } // 전체 Column (탭 포함)
     }
 }
 

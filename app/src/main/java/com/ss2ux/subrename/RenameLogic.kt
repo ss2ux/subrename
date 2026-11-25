@@ -339,3 +339,70 @@ fun buildProposals(fileNames: List<String>): MatchResult {
         ambiguousGroups = groups
     )
 }
+
+/**
+ * 기능2: 자막 파일명 끝의 미디어 확장자 조각을 제거한다.
+ * 예) 곡.mp3.vtt → 곡.vtt ,  곡.wav.srt → 곡.srt ,  song.MP3.VTT → song.VTT
+ *
+ * 트랙/미디어 파일과 무관하게, 폴더 안 **모든 자막** 중
+ * stem 이 `.mp3` / `.wav` 등 미디어 확장자로 끝나는 것만 대상으로 한다.
+ */
+fun buildStripMediaExtProposals(fileNames: List<String>): MatchResult {
+    val existing = fileNames.toSet()
+    val occupied = existing.map { it.lowercase() }.toMutableSet()
+    val proposals = ArrayList<RenameProposal>()
+    val conflicts = ArrayList<String>()
+    val skipped = ArrayList<String>()
+
+    for (name in fileNames.sorted()) {
+        val info = parseFileName(name) ?: continue
+        if (!info.isSub) continue
+
+        // stem 끝이 .mp3 / .wav 등인지 (대소문자 무시)
+        val stem = info.stem
+        val dot = stem.lastIndexOf('.')
+        if (dot <= 0) {
+            skipped.add("$name (미디어 확장자 조각 없음)")
+            continue
+        }
+        val maybeMedia = stem.substring(dot + 1).lowercase()
+        if (maybeMedia !in MEDIA_EXTS) {
+            skipped.add("$name (미디어 확장자 조각 없음)")
+            continue
+        }
+        val cleanStem = stem.substring(0, dot)
+        if (cleanStem.isBlank()) {
+            conflicts.add("$name (이름을 비울 수 없음)")
+            continue
+        }
+        val desired = cleanStem + "." + info.originalExt
+        if (desired.equals(name, ignoreCase = true)) {
+            skipped.add("$name (이미 정리됨)")
+            continue
+        }
+        // 대상 이름이 이미 있거나, 이번 배치에서 이미 쓰기로 한 이름이면 충돌
+        val desiredLower = desired.lowercase()
+        val existsOnDisk = existing.any { it.equals(desired, ignoreCase = true) }
+        if ((existsOnDisk || desiredLower in occupied) && !desired.equals(name, ignoreCase = true)) {
+            conflicts.add("$name → $desired (대상 이름이 이미 존재)")
+            continue
+        }
+        occupied.add(desiredLower)
+        occupied.remove(name.lowercase())
+        proposals.add(
+            RenameProposal(
+                oldName = name,
+                newName = desired,
+                key = "strip",
+                mediaStem = cleanStem
+            )
+        )
+    }
+
+    return MatchResult(
+        proposals = proposals.sortedBy { it.oldName },
+        conflicts = conflicts,
+        skipped = skipped,
+        ambiguousGroups = emptyList()
+    )
+}
